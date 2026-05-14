@@ -1,0 +1,15 @@
+{
+  "name": "nwc-seo-dashboard",
+  "version": "1.0.0",
+  "description": "SEO Ranking Dashboard for New Wave Creative",
+  "private": true,
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "concurrently \"cd backend && npm run dev\" \"cd frontend && npm start\"",
+    "build": "cd frontend && npm run build",
+    "postbuild": "echo 'Build complete'"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.1"
+  }
+}
