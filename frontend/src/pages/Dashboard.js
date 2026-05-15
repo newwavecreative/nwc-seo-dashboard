@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import '../styles/Dashboard.css';
 
@@ -11,11 +11,7 @@ function Dashboard({ token, user, onLogout }) {
   const [topPages, setTopPages] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchData();
-  }, [token]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       const headers = { Authorization: `Bearer ${token}` };
@@ -34,7 +30,11 @@ function Dashboard({ token, user, onLogout }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [token]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   if (loading) {
     return <div className="dashboard"><p>Loading...</p></div>;
@@ -135,7 +135,7 @@ function Dashboard({ token, user, onLogout }) {
         </div>
       </div>
 
-      <button onClick={fetchData} className="refresh-button">Refresh Data</button>
+      <button onClick={() => fetchData()} className="refresh-button">Refresh Data</button>
     </div>
   );
 }
