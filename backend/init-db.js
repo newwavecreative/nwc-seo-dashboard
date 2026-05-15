@@ -20,6 +20,17 @@ async function initializeDB() {
   try {
     console.log('🔧 Initializing database...');
 
+    // Check if already initialized
+    try {
+      const userCheck = await pool.query('SELECT COUNT(*) FROM users');
+      if (userCheck.rows[0].count > 0) {
+        console.log('✓ Database already initialized');
+        return;
+      }
+    } catch (err) {
+      // Tables don't exist yet, continue with initialization
+    }
+
     // Create tables
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -80,16 +91,18 @@ async function initializeDB() {
     }
 
     console.log('\n✅ Database initialized successfully!');
-    console.log('\nYou can now login with:');
-    console.log(`  Email: ${email}`);
-    console.log(`  Password: ${password}`);
-    console.log('\nChange this password after first login!');
+    console.log(`\nTest user: ${email}`);
 
     await pool.end();
+    process.exit(0);
   } catch (err) {
     console.error('❌ Initialization failed:', err);
     process.exit(1);
   }
 }
 
-initializeDB();
+// Run init on startup
+initializeDB().catch((err) => {
+  console.error('Fatal error:', err);
+  process.exit(1);
+});
