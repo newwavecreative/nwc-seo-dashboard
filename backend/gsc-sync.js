@@ -4,7 +4,6 @@
  */
 
 const { Pool } = require('pg');
-const { Credentials } = require('google-auth-library');
 const { google } = require('googleapis');
 require('dotenv').config();
 
@@ -19,34 +18,75 @@ const pool = new Pool({
 
 const DOMAIN = 'newwavecreative.io';
 
+async function refreshAccessToken(refreshToken, clientId, clientSecret) {
+  console.log('🔄 Refreshing Google access token...');
+  
+  const oauth2Client = new google.auth.OAuth2(
+    clientId,
+    clientSecret,
+    'http://localhost:3000/auth/google/callback'
+  );
+
+  return new Promise((resolve, reject) => {
+    oauth2Client.refreshAccessToken((err, tokens) => {
+      if (err) {
+        reject(new Error(`Token refresh failed: ${err.message}`));
+      } else {
+        console.log('✓ Token refreshed successfully');
+        resolve(tokens.access_token);
+      }
+    });
+  });
+}
+
 async function syncGSCData() {
   console.log('🔄 Starting GSC data sync...');
   
   try {
-    // Load OAuth token from token.json (in root directory)
-    let tokenData;
-    try {
-      const fs = require('fs');
-      const tokenPath = process.env.TOKEN_PATH || '/Users/charles/.openclaw/workspace/token.json';
-      tokenData = JSON.parse(fs.readFileSync(tokenPath));
-    } catch (err) {
-      console.error('❌ Could not load token.json. Make sure OAuth is set up.');
-      return;
+    // Load OAuth credentials from env vars or token.json
+    let token, refreshToken, clientId, clientSecret;
+    
+    if (process.env.GOOGLE_AUTH_TOKEN && process.env.GOOGLE_REFRESH_TOKEN) {
+      console.log('🔑 Loading credentials from environment variables');
+      token = process.env.GOOGLE_AUTH_TOKEN;
+      refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+      clientId = process.env.GOOGLE_CLIENT_ID;
+      clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    } else {
+      console.log('📄 Loading credentials from token.json');
+      try {
+        const fs = require('fs');
+        const tokenPath = process.env.TOKEN_PATH || '/Users/charles/.openclaw/workspace/token.json';
+        const tokenData = JSON.parse(fs.readFileSync(tokenPath));
+        token = tokenData.token;
+        refreshToken = tokenData.refresh_token;
+        clientId = tokenData.client_id;
+        clientSecret = tokenData.client_secret;
+      } catch (err) {
+        throw new Error(`Could not load OAuth credentials: ${err.message}`);
+      }
     }
 
-    // Create credentials from token
-    const auth = new Credentials(tokenData);
+    if (!token || !refreshToken || !clientId || !clientSecret) {
+      throw new Error('Missing OAuth credentials. Set GOOGLE_* env vars or provide token.json');
+    }
+
+    // Try to use the access token
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
+    oauth2Client.setCredentials({ access_token: token, refresh_token: refreshToken });
 
     // Initialize Webmasters API
     const webmasters = google.webmasters({
       version: 'v3',
-      auth: auth,
+      auth: oauth2Client,
     });
 
     // Query GSC data for last 90 days
     const endDate = new Date();
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - 90);
+
+    console.log(`📊 Querying GSC data from ${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]}`);
 
     const response = await webmasters.searchanalytics.query({
       siteUrl: `https://${DOMAIN}/`,
@@ -58,14 +98,17 @@ async function syncGSCData() {
       },
     });
 
-    if (!response.data.rows) {
-      console.log('✓ No GSC data found');
-      return;
+    if (!response.data.rows || response.data.rows.length === 0) {
+      console.log('ℹ️  No GSC data found for this period');
+      return 0;
     }
+
+    console.log(`📥 Received ${response.data.rows.length} rows from GSC`);
 
     // Store data in database
     const snapshotDate = new Date().toISOString().split('T')[0];
     let insertedCount = 0;
+    let skippedCount = 0;
 
     for (const row of response.data.rows) {
       const pageUrl = row.keys[0];
@@ -84,13 +127,15 @@ async function syncGSCData() {
         insertedCount++;
       } catch (err) {
         // Duplicate insert is fine, just skip
-        if (err.code !== '23505') {
+        if (err.code === '23505') {
+          skippedCount++;
+        } else {
           console.error('Insert error:', err.message);
         }
       }
     }
 
-    console.log(`✓ GSC sync complete. Inserted ${insertedCount} records`);
+    console.log(`✓ GSC sync complete. Inserted ${insertedCount} records (${skippedCount} duplicates skipped)`);
     return insertedCount;
   } catch (err) {
     console.error('❌ GSC sync error:', err.message);
