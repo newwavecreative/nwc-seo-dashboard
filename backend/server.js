@@ -3,7 +3,7 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const cron = require('node-cron');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -23,65 +23,6 @@ const pool = new Pool({
 // Middleware
 app.use(cors());
 app.use(express.json());
-
-// Serve React frontend in production
-const path = require('path');
-if (process.env.NODE_ENV === 'production') {
-  const frontendBuildPath = path.join(__dirname, '../frontend/build');
-  app.use(express.static(frontendBuildPath));
-  app.get('*', (req, res) => {
-    // Don't redirect API calls
-    if (req.path.startsWith('/api/')) {
-      return res.status(404).json({ error: 'Not found' });
-    }
-    res.sendFile(path.join(frontendBuildPath, 'index.html'));
-  });
-}
-
-// Initialize database tables
-async function initDB() {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        name VARCHAR(255),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS gsc_snapshots (
-        id SERIAL PRIMARY KEY,
-        page_url VARCHAR(500),
-        query TEXT,
-        impressions INTEGER,
-        clicks INTEGER,
-        ctr DECIMAL(5,2),
-        position DECIMAL(5,2),
-        snapshot_date DATE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS ranking_targets (
-        id SERIAL PRIMARY KEY,
-        keyword VARCHAR(255) NOT NULL,
-        target_page VARCHAR(500),
-        target_position INTEGER,
-        current_position DECIMAL(5,2),
-        current_impressions INTEGER,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_gsc_date ON gsc_snapshots(snapshot_date);
-      CREATE INDEX IF NOT EXISTS idx_gsc_page ON gsc_snapshots(page_url);
-      CREATE INDEX IF NOT EXISTS idx_gsc_query ON gsc_snapshots(query);
-    `);
-    console.log('✓ Database initialized');
-  } catch (err) {
-    console.error('Database init error:', err);
-  }
-}
 
 // Auth routes
 app.post('/api/auth/login', async (req, res) => {
@@ -219,13 +160,73 @@ app.get('/api/seo/top-pages', authenticateToken, async (req, res) => {
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok' });
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Serve React frontend in production (MUST be after API routes)
+if (process.env.NODE_ENV === 'production') {
+  const frontendBuildPath = path.join(__dirname, '../frontend/build');
+  console.log(`📁 Serving frontend from: ${frontendBuildPath}`);
+  
+  app.use(express.static(frontendBuildPath));
+  
+  // Catch-all route - serve index.html for any unmatched routes
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(frontendBuildPath, 'index.html'));
+  });
+}
+
+// Initialize database tables
+async function initDB() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        name VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS gsc_snapshots (
+        id SERIAL PRIMARY KEY,
+        page_url VARCHAR(500),
+        query TEXT,
+        impressions INTEGER,
+        clicks INTEGER,
+        ctr DECIMAL(5,2),
+        position DECIMAL(5,2),
+        snapshot_date DATE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS ranking_targets (
+        id SERIAL PRIMARY KEY,
+        keyword VARCHAR(255) NOT NULL,
+        target_page VARCHAR(500),
+        target_position INTEGER,
+        current_position DECIMAL(5,2),
+        current_impressions INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_gsc_date ON gsc_snapshots(snapshot_date);
+      CREATE INDEX IF NOT EXISTS idx_gsc_page ON gsc_snapshots(page_url);
+      CREATE INDEX IF NOT EXISTS idx_gsc_query ON gsc_snapshots(query);
+    `);
+    console.log('✓ Database tables initialized');
+  } catch (err) {
+    console.error('Database init error:', err);
+  }
+}
 
 // Initialize and start server
 initDB().then(() => {
   app.listen(PORT, () => {
     console.log(`✓ Server running on port ${PORT}`);
+    console.log(`✓ API available at http://localhost:${PORT}/api/`);
+    console.log(`✓ Environment: ${process.env.NODE_ENV || 'development'}`);
   });
 });
 
