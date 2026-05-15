@@ -94,6 +94,7 @@ async function syncGSCData() {
     return insertedCount;
   } catch (err) {
     console.error('❌ GSC sync error:', err.message);
+    throw err;
   }
 }
 

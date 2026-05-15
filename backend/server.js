@@ -169,15 +169,17 @@ app.post('/api/sync/gsc', authenticateToken, async (req, res) => {
   try {
     console.log('📊 Manual GSC sync triggered by', req.user.email);
     const result = await syncGSCData();
+    const recordCount = result || 0;
+    console.log(`✓ Sync returned: ${recordCount} records`);
     res.json({ 
       success: true, 
-      message: `GSC sync completed. Inserted ${result} records.`,
-      recordsInserted: result,
+      message: `GSC sync completed. Inserted ${recordCount} records.`,
+      recordsInserted: recordCount,
       timestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error('Sync error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('❌ Sync error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
