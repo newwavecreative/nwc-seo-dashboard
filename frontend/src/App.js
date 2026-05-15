@@ -5,7 +5,8 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import './App.css';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+// In production, use relative /api; in dev, use localhost
+const API_URL = process.env.REACT_APP_API_URL || (process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:3001');
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token'));
@@ -14,7 +15,7 @@ function App() {
   useEffect(() => {
     if (token) {
       // Verify token is still valid
-      axios.get(`${API_URL}/api/health`, {
+      axios.get(`${API_URL}/health`, {
         headers: { Authorization: `Bearer ${token}` }
       }).catch(() => {
         setToken(null);

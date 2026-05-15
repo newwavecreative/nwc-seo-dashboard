@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import '../styles/Login.css';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+// In production, use relative /api; in dev, use localhost
+const API_URL = process.env.REACT_APP_API_URL || (process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:3001');
 
 function Login({ onLogin }) {
   const [email, setEmail] = useState('');
@@ -16,7 +17,7 @@ function Login({ onLogin }) {
     setLoading(true);
 
     try {
-      const response = await axios.post(`${API_URL}/api/auth/login`, {
+      const response = await axios.post(`${API_URL}/auth/login`, {
         email,
         password,
       });

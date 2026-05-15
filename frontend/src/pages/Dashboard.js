@@ -3,7 +3,8 @@ import axios from 'axios';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import '../styles/Dashboard.css';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+// In production, use relative /api; in dev, use localhost
+const API_URL = process.env.REACT_APP_API_URL || (process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:3001');
 
 function Dashboard({ token, user, onLogout }) {
   const [summary, setSummary] = useState(null);
@@ -21,9 +22,9 @@ function Dashboard({ token, user, onLogout }) {
       const headers = { Authorization: `Bearer ${token}` };
 
       const [summaryRes, keywordsRes, pagesRes] = await Promise.all([
-        axios.get(`${API_URL}/api/seo/summary`, { headers }),
-        axios.get(`${API_URL}/api/seo/top-keywords`, { headers }),
-        axios.get(`${API_URL}/api/seo/top-pages`, { headers }),
+        axios.get(`${API_URL}/seo/summary`, { headers }),
+        axios.get(`${API_URL}/seo/top-keywords`, { headers }),
+        axios.get(`${API_URL}/seo/top-pages`, { headers }),
       ]);
 
       setSummary(summaryRes.data);

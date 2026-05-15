@@ -24,6 +24,20 @@ const pool = new Pool({
 app.use(cors());
 app.use(express.json());
 
+// Serve React frontend in production
+const path = require('path');
+if (process.env.NODE_ENV === 'production') {
+  const frontendBuildPath = path.join(__dirname, '../frontend/build');
+  app.use(express.static(frontendBuildPath));
+  app.get('*', (req, res) => {
+    // Don't redirect API calls
+    if (req.path.startsWith('/api/')) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    res.sendFile(path.join(frontendBuildPath, 'index.html'));
+  });
+}
+
 // Initialize database tables
 async function initDB() {
   try {
