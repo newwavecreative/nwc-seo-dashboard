@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const path = require('path');
 require('dotenv').config();
+const { syncGSCData } = require('./gsc-sync');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -161,6 +162,23 @@ app.get('/api/seo/top-pages', authenticateToken, async (req, res) => {
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Manual GSC sync trigger (authenticated)
+app.post('/api/sync/gsc', authenticateToken, async (req, res) => {
+  try {
+    console.log('📊 Manual GSC sync triggered by', req.user.email);
+    const result = await syncGSCData();
+    res.json({ 
+      success: true, 
+      message: `GSC sync completed. Inserted ${result} records.`,
+      recordsInserted: result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Sync error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Serve React frontend in production (MUST be after API routes)
