@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import '../styles/Dashboard.css';
 
 // In production, use relative /api; in dev, use localhost
@@ -14,7 +13,7 @@ function Dashboard({ token, user, onLogout }) {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [token]);
 
   const fetchData = async () => {
     try {
