@@ -18,6 +18,17 @@
 .dashboard-header h1 {
   font-size: 28px;
   color: #333;
+  margin: 0;
+}
+
+.dashboard-header p {
+  margin: 0;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 20px;
 }
 
 .user-info {
@@ -39,6 +50,31 @@
 
 .user-info button:hover {
   background: #c82333;
+}
+
+.toggle-button {
+  padding: 10px 16px;
+  background: #e9ecef;
+  color: #333;
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.toggle-button:hover {
+  background: #dee2e6;
+}
+
+.toggle-button.active {
+  background: #667eea;
+  color: white;
+}
+
+.toggle-button.active:hover {
+  background: #5568d3;
 }
 
 .summary-cards {
@@ -66,6 +102,13 @@
   font-size: 32px;
   font-weight: 600;
   color: #333;
+  margin: 0;
+}
+
+.change-indicator {
+  font-size: 14px;
+  margin-top: 8px;
+  color: #666;
 }
 
 .charts-container {
@@ -149,11 +192,28 @@ tr:hover {
     gap: 10px;
   }
 
+  .header-controls {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .toggle-button {
+    width: 100%;
+  }
+
   .charts-container {
     grid-template-columns: 1fr;
   }
 
   .summary-cards {
     grid-template-columns: 1fr;
+  }
+
+  .table {
+    font-size: 12px;
+  }
+
+  th, td {
+    padding: 8px;
   }
 }

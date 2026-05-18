@@ -159,6 +159,202 @@ app.get('/api/seo/top-pages', authenticateToken, async (req, res) => {
   }
 });
 
+// Comparison endpoint - current 30 days vs previous 30 days
+app.get('/api/seo/comparison', authenticateToken, async (req, res) => {
+  try {
+    // Current 30 days
+    const currentResult = await pool.query(`
+      SELECT 
+        COUNT(DISTINCT query) as total_queries,
+        SUM(impressions) as total_impressions,
+        SUM(clicks) as total_clicks,
+        ROUND(AVG(position)::numeric, 1) as avg_position
+      FROM gsc_snapshots
+      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '30 days'
+    `);
+
+    // Previous 30 days (days 31-60)
+    const previousResult = await pool.query(`
+      SELECT 
+        COUNT(DISTINCT query) as total_queries,
+        SUM(impressions) as total_impressions,
+        SUM(clicks) as total_clicks,
+        ROUND(AVG(position)::numeric, 1) as avg_position
+      FROM gsc_snapshots
+      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '60 days'
+        AND snapshot_date < CURRENT_DATE - INTERVAL '30 days'
+    `);
+
+    const current = currentResult.rows[0];
+    const previous = previousResult.rows[0];
+
+    // Calculate % changes
+    const calcChange = (curr, prev) => {
+      const c = parseFloat(curr) || 0;
+      const p = parseFloat(prev) || 0;
+      if (p === 0) return c > 0 ? 100 : 0;
+      return parseFloat(((c - p) / p * 100).toFixed(1));
+    };
+
+    const comparison = {
+      current: {
+        total_queries: parseInt(current.total_queries),
+        total_impressions: parseInt(current.total_impressions),
+        total_clicks: parseInt(current.total_clicks),
+        avg_position: current.avg_position
+      },
+      previous: {
+        total_queries: parseInt(previous.total_queries),
+        total_impressions: parseInt(previous.total_impressions),
+        total_clicks: parseInt(previous.total_clicks),
+        avg_position: previous.avg_position
+      },
+      change: {
+        total_queries_pct: calcChange(current.total_queries, previous.total_queries),
+        total_impressions_pct: calcChange(current.total_impressions, previous.total_impressions),
+        total_clicks_pct: calcChange(current.total_clicks, previous.total_clicks),
+        avg_position_pct: calcChange(current.avg_position, previous.avg_position) * -1 // inverted: lower position is better
+      }
+    };
+
+    res.json(comparison);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Top keywords comparison
+app.get('/api/seo/top-keywords-comparison', authenticateToken, async (req, res) => {
+  try {
+    // Current 30 days
+    const currentResult = await pool.query(`
+      SELECT 
+        query,
+        SUM(impressions) as total_impressions,
+        SUM(clicks) as total_clicks,
+        ROUND((SUM(clicks)::float / NULLIF(SUM(impressions), 0) * 100)::numeric, 2) as ctr,
+        ROUND(AVG(position)::numeric, 1) as avg_position
+      FROM gsc_snapshots
+      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '30 days'
+      GROUP BY query
+      ORDER BY total_impressions DESC
+      LIMIT 20
+    `);
+
+    // Previous 30 days
+    const previousResult = await pool.query(`
+      SELECT 
+        query,
+        SUM(impressions) as total_impressions,
+        SUM(clicks) as total_clicks,
+        ROUND((SUM(clicks)::float / NULLIF(SUM(impressions), 0) * 100)::numeric, 2) as ctr,
+        ROUND(AVG(position)::numeric, 1) as avg_position
+      FROM gsc_snapshots
+      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '60 days'
+        AND snapshot_date < CURRENT_DATE - INTERVAL '30 days'
+      GROUP BY query
+      ORDER BY total_impressions DESC
+      LIMIT 20
+    `);
+
+    // Create a map of previous data for easy lookup
+    const prevMap = {};
+    previousResult.rows.forEach(row => {
+      prevMap[row.query] = row;
+    });
+
+    // Calculate % changes
+    const calcChange = (curr, prev) => {
+      const c = parseFloat(curr) || 0;
+      const p = parseFloat(prev) || 0;
+      if (p === 0) return c > 0 ? 100 : 0;
+      return parseFloat(((c - p) / p * 100).toFixed(1));
+    };
+
+    const comparison = currentResult.rows.map(curr => {
+      const prev = prevMap[curr.query];
+      return {
+        ...curr,
+        total_impressions: parseInt(curr.total_impressions),
+        total_clicks: parseInt(curr.total_clicks),
+        impressions_pct: prev ? calcChange(curr.total_impressions, prev.total_impressions) : null,
+        clicks_pct: prev ? calcChange(curr.total_clicks, prev.total_clicks) : null,
+        position_pct: prev ? calcChange(curr.avg_position, prev.avg_position) * -1 : null
+      };
+    });
+
+    res.json(comparison);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Top pages comparison
+app.get('/api/seo/top-pages-comparison', authenticateToken, async (req, res) => {
+  try {
+    // Current 30 days
+    const currentResult = await pool.query(`
+      SELECT 
+        page_url,
+        SUM(impressions) as total_impressions,
+        SUM(clicks) as total_clicks,
+        ROUND((SUM(clicks)::float / NULLIF(SUM(impressions), 0) * 100)::numeric, 2) as ctr,
+        ROUND(AVG(position)::numeric, 1) as avg_position
+      FROM gsc_snapshots
+      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '30 days'
+      GROUP BY page_url
+      ORDER BY total_impressions DESC
+      LIMIT 15
+    `);
+
+    // Previous 30 days
+    const previousResult = await pool.query(`
+      SELECT 
+        page_url,
+        SUM(impressions) as total_impressions,
+        SUM(clicks) as total_clicks,
+        ROUND((SUM(clicks)::float / NULLIF(SUM(impressions), 0) * 100)::numeric, 2) as ctr,
+        ROUND(AVG(position)::numeric, 1) as avg_position
+      FROM gsc_snapshots
+      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '60 days'
+        AND snapshot_date < CURRENT_DATE - INTERVAL '30 days'
+      GROUP BY page_url
+      ORDER BY total_impressions DESC
+      LIMIT 15
+    `);
+
+    // Create a map of previous data for easy lookup
+    const prevMap = {};
+    previousResult.rows.forEach(row => {
+      prevMap[row.page_url] = row;
+    });
+
+    // Calculate % changes
+    const calcChange = (curr, prev) => {
+      const c = parseFloat(curr) || 0;
+      const p = parseFloat(prev) || 0;
+      if (p === 0) return c > 0 ? 100 : 0;
+      return parseFloat(((c - p) / p * 100).toFixed(1));
+    };
+
+    const comparison = currentResult.rows.map(curr => {
+      const prev = prevMap[curr.page_url];
+      return {
+        ...curr,
+        total_impressions: parseInt(curr.total_impressions),
+        total_clicks: parseInt(curr.total_clicks),
+        impressions_pct: prev ? calcChange(curr.total_impressions, prev.total_impressions) : null,
+        clicks_pct: prev ? calcChange(curr.total_clicks, prev.total_clicks) : null,
+        position_pct: prev ? calcChange(curr.avg_position, prev.avg_position) * -1 : null
+      };
+    });
+
+    res.json(comparison);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
