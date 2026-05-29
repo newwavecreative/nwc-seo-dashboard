@@ -375,15 +375,88 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// GSC sync health — unauthenticated so external watchdogs can poll it.
+// Returns no sensitive data, just sync status + freshness of the data.
+app.get('/api/health/gsc', async (req, res) => {
+  try {
+    const lastAttempt = await pool.query(`
+      SELECT status, started_at, finished_at, rows_upserted, error_message, trigger
+      FROM gsc_sync_log ORDER BY id DESC LIMIT 1
+    `);
+    const lastSuccess = await pool.query(`
+      SELECT started_at, rows_upserted, trigger FROM gsc_sync_log
+      WHERE status = 'success' ORDER BY id DESC LIMIT 1
+    `);
+    const dataState = await pool.query(`
+      SELECT MAX(snapshot_date) AS latest_date, COUNT(*)::int AS total_rows
+      FROM gsc_snapshots
+    `);
+
+    const last = lastAttempt.rows[0] || null;
+    const success = lastSuccess.rows[0] || null;
+    const hoursSinceSuccess = success
+      ? (Date.now() - new Date(success.started_at).getTime()) / 3600000
+      : null;
+
+    // Healthy = had a successful sync in the last 30h (24h cron + 6h grace),
+    // AND the most recent attempt wasn't an error newer than the last success.
+    const recentSuccess = hoursSinceSuccess !== null && hoursSinceSuccess < 30;
+    const noNewerFailure =
+      !last || last.status !== 'error' ||
+      (success && new Date(success.started_at) > new Date(last.started_at));
+    const healthy = recentSuccess && noNewerFailure;
+
+    res.json({
+      healthy,
+      last_attempt: last,
+      last_success_at: success ? success.started_at : null,
+      last_success_rows: success ? success.rows_upserted : null,
+      hours_since_success: hoursSinceSuccess !== null
+        ? Math.round(hoursSinceSuccess * 10) / 10 : null,
+      data: dataState.rows[0],
+    });
+  } catch (err) {
+    res.status(500).json({ healthy: false, error: err.message });
+  }
+});
+
+// Wrapper around syncGSCData() that records each run in gsc_sync_log so
+// /api/health/gsc and external watchdogs can detect failures.
+async function runSyncWithLog(triggerLabel) {
+  const start = await pool.query(
+    `INSERT INTO gsc_sync_log (status, trigger) VALUES ('running', $1) RETURNING id`,
+    [triggerLabel]
+  );
+  const logId = start.rows[0].id;
+  try {
+    const count = await syncGSCData();
+    await pool.query(
+      `UPDATE gsc_sync_log
+       SET status = 'success', rows_upserted = $1, finished_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [count, logId]
+    );
+    return count;
+  } catch (err) {
+    await pool.query(
+      `UPDATE gsc_sync_log
+       SET status = 'error', error_message = $1, finished_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [(err.message || String(err)).slice(0, 1000), logId]
+    );
+    throw err;
+  }
+}
+
 // Manual GSC sync trigger (authenticated)
 app.post('/api/sync/gsc', authenticateToken, async (req, res) => {
   try {
     console.log('📊 Manual GSC sync triggered by', req.user.email);
-    const result = await syncGSCData();
+    const result = await runSyncWithLog('manual');
     const recordCount = result || 0;
     console.log(`✓ Sync returned: ${recordCount} records`);
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: `GSC sync completed. Inserted ${recordCount} records.`,
       recordsInserted: recordCount,
       timestamp: new Date().toISOString()
@@ -445,6 +518,17 @@ async function initDB() {
       CREATE INDEX IF NOT EXISTS idx_gsc_date ON gsc_snapshots(snapshot_date);
       CREATE INDEX IF NOT EXISTS idx_gsc_page ON gsc_snapshots(page_url);
       CREATE INDEX IF NOT EXISTS idx_gsc_query ON gsc_snapshots(query);
+
+      CREATE TABLE IF NOT EXISTS gsc_sync_log (
+        id SERIAL PRIMARY KEY,
+        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        finished_at TIMESTAMP,
+        status TEXT NOT NULL,
+        trigger TEXT,
+        rows_upserted INTEGER,
+        error_message TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_gsc_sync_log_started ON gsc_sync_log(started_at DESC);
     `);
     console.log('✓ Database tables initialized');
 
@@ -494,7 +578,7 @@ initDB().then(() => {
     cron.schedule('0 6 * * *', async () => {
       console.log('⏰ Scheduled GSC sync starting...');
       try {
-        const count = await syncGSCData();
+        const count = await runSyncWithLog('cron');
         console.log(`✓ Scheduled sync done. Upserted ${count} rows.`);
       } catch (err) {
         console.error('❌ Scheduled sync failed:', err.message);
@@ -509,7 +593,7 @@ initDB().then(() => {
         const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM gsc_snapshots');
         if (rows[0].n === 0) {
           console.log('📊 gsc_snapshots empty on boot — running initial sync');
-          const count = await syncGSCData();
+          const count = await runSyncWithLog('boot');
           console.log(`✓ Initial sync done. Upserted ${count} rows.`);
         }
       } catch (err) {
