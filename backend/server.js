@@ -4,6 +4,7 @@ const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const path = require('path');
+const cron = require('node-cron');
 require('dotenv').config();
 const { syncGSCData } = require('./gsc-sync');
 
@@ -98,16 +99,22 @@ app.get('/api/seo/rankings', authenticateToken, async (req, res) => {
 
 app.get('/api/seo/summary', authenticateToken, async (req, res) => {
   try {
+    // Window of N days anchored to the latest available GSC date, not CURRENT_DATE.
+    // GSC has a 2-3 day reporting lag and our sync runs weekly, so anchoring to
+    // CURRENT_DATE produced empty results between syncs. Default N = 7.
+    const days = parseInt(req.query.days) || 7;
     const result = await pool.query(`
-      SELECT 
+      WITH latest AS (SELECT MAX(snapshot_date) AS d FROM gsc_snapshots)
+      SELECT
         COUNT(DISTINCT query) as total_queries,
         SUM(impressions) as total_impressions,
         SUM(clicks) as total_clicks,
         ROUND(AVG(position)::numeric, 1) as avg_position,
-        MAX(snapshot_date) as latest_date
+        (SELECT d FROM latest) as latest_date
       FROM gsc_snapshots
-      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '7 days'
-    `);
+      WHERE snapshot_date > (SELECT d FROM latest) - ($1 || ' days')::interval
+        AND snapshot_date <= (SELECT d FROM latest)
+    `, [days]);
 
     res.json(result.rows[0]);
   } catch (err) {
@@ -118,14 +125,16 @@ app.get('/api/seo/summary', authenticateToken, async (req, res) => {
 app.get('/api/seo/top-keywords', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT 
+      WITH latest AS (SELECT MAX(snapshot_date) AS d FROM gsc_snapshots)
+      SELECT
         query,
         SUM(impressions) as total_impressions,
         SUM(clicks) as total_clicks,
         ROUND((SUM(clicks)::float / NULLIF(SUM(impressions), 0) * 100)::numeric, 2) as ctr,
         ROUND(AVG(position)::numeric, 1) as avg_position
       FROM gsc_snapshots
-      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '30 days'
+      WHERE snapshot_date > (SELECT d FROM latest) - INTERVAL '30 days'
+        AND snapshot_date <= (SELECT d FROM latest)
       GROUP BY query
       ORDER BY total_impressions DESC
       LIMIT 20
@@ -140,14 +149,16 @@ app.get('/api/seo/top-keywords', authenticateToken, async (req, res) => {
 app.get('/api/seo/top-pages', authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT 
+      WITH latest AS (SELECT MAX(snapshot_date) AS d FROM gsc_snapshots)
+      SELECT
         page_url,
         SUM(impressions) as total_impressions,
         SUM(clicks) as total_clicks,
         ROUND((SUM(clicks)::float / NULLIF(SUM(impressions), 0) * 100)::numeric, 2) as ctr,
         ROUND(AVG(position)::numeric, 1) as avg_position
       FROM gsc_snapshots
-      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '30 days'
+      WHERE snapshot_date > (SELECT d FROM latest) - INTERVAL '30 days'
+        AND snapshot_date <= (SELECT d FROM latest)
       GROUP BY page_url
       ORDER BY total_impressions DESC
       LIMIT 15
@@ -162,27 +173,29 @@ app.get('/api/seo/top-pages', authenticateToken, async (req, res) => {
 // Comparison endpoint - current 30 days vs previous 30 days
 app.get('/api/seo/comparison', authenticateToken, async (req, res) => {
   try {
-    // Current 30 days
+    // Anchor windows to MAX(snapshot_date) — see /api/seo/summary for rationale.
     const currentResult = await pool.query(`
-      SELECT 
+      WITH latest AS (SELECT MAX(snapshot_date) AS d FROM gsc_snapshots)
+      SELECT
         COUNT(DISTINCT query) as total_queries,
         SUM(impressions) as total_impressions,
         SUM(clicks) as total_clicks,
         ROUND(AVG(position)::numeric, 1) as avg_position
       FROM gsc_snapshots
-      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '30 days'
+      WHERE snapshot_date > (SELECT d FROM latest) - INTERVAL '30 days'
+        AND snapshot_date <= (SELECT d FROM latest)
     `);
 
-    // Previous 30 days (days 31-60)
     const previousResult = await pool.query(`
-      SELECT 
+      WITH latest AS (SELECT MAX(snapshot_date) AS d FROM gsc_snapshots)
+      SELECT
         COUNT(DISTINCT query) as total_queries,
         SUM(impressions) as total_impressions,
         SUM(clicks) as total_clicks,
         ROUND(AVG(position)::numeric, 1) as avg_position
       FROM gsc_snapshots
-      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '60 days'
-        AND snapshot_date < CURRENT_DATE - INTERVAL '30 days'
+      WHERE snapshot_date > (SELECT d FROM latest) - INTERVAL '60 days'
+        AND snapshot_date <= (SELECT d FROM latest) - INTERVAL '30 days'
     `);
 
     const current = currentResult.rows[0];
@@ -226,32 +239,33 @@ app.get('/api/seo/comparison', authenticateToken, async (req, res) => {
 // Top keywords comparison
 app.get('/api/seo/top-keywords-comparison', authenticateToken, async (req, res) => {
   try {
-    // Current 30 days
     const currentResult = await pool.query(`
-      SELECT 
+      WITH latest AS (SELECT MAX(snapshot_date) AS d FROM gsc_snapshots)
+      SELECT
         query,
         SUM(impressions) as total_impressions,
         SUM(clicks) as total_clicks,
         ROUND((SUM(clicks)::float / NULLIF(SUM(impressions), 0) * 100)::numeric, 2) as ctr,
         ROUND(AVG(position)::numeric, 1) as avg_position
       FROM gsc_snapshots
-      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '30 days'
+      WHERE snapshot_date > (SELECT d FROM latest) - INTERVAL '30 days'
+        AND snapshot_date <= (SELECT d FROM latest)
       GROUP BY query
       ORDER BY total_impressions DESC
       LIMIT 20
     `);
 
-    // Previous 30 days
     const previousResult = await pool.query(`
-      SELECT 
+      WITH latest AS (SELECT MAX(snapshot_date) AS d FROM gsc_snapshots)
+      SELECT
         query,
         SUM(impressions) as total_impressions,
         SUM(clicks) as total_clicks,
         ROUND((SUM(clicks)::float / NULLIF(SUM(impressions), 0) * 100)::numeric, 2) as ctr,
         ROUND(AVG(position)::numeric, 1) as avg_position
       FROM gsc_snapshots
-      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '60 days'
-        AND snapshot_date < CURRENT_DATE - INTERVAL '30 days'
+      WHERE snapshot_date > (SELECT d FROM latest) - INTERVAL '60 days'
+        AND snapshot_date <= (SELECT d FROM latest) - INTERVAL '30 days'
       GROUP BY query
       ORDER BY total_impressions DESC
       LIMIT 20
@@ -292,32 +306,33 @@ app.get('/api/seo/top-keywords-comparison', authenticateToken, async (req, res) 
 // Top pages comparison
 app.get('/api/seo/top-pages-comparison', authenticateToken, async (req, res) => {
   try {
-    // Current 30 days
     const currentResult = await pool.query(`
-      SELECT 
+      WITH latest AS (SELECT MAX(snapshot_date) AS d FROM gsc_snapshots)
+      SELECT
         page_url,
         SUM(impressions) as total_impressions,
         SUM(clicks) as total_clicks,
         ROUND((SUM(clicks)::float / NULLIF(SUM(impressions), 0) * 100)::numeric, 2) as ctr,
         ROUND(AVG(position)::numeric, 1) as avg_position
       FROM gsc_snapshots
-      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '30 days'
+      WHERE snapshot_date > (SELECT d FROM latest) - INTERVAL '30 days'
+        AND snapshot_date <= (SELECT d FROM latest)
       GROUP BY page_url
       ORDER BY total_impressions DESC
       LIMIT 15
     `);
 
-    // Previous 30 days
     const previousResult = await pool.query(`
-      SELECT 
+      WITH latest AS (SELECT MAX(snapshot_date) AS d FROM gsc_snapshots)
+      SELECT
         page_url,
         SUM(impressions) as total_impressions,
         SUM(clicks) as total_clicks,
         ROUND((SUM(clicks)::float / NULLIF(SUM(impressions), 0) * 100)::numeric, 2) as ctr,
         ROUND(AVG(position)::numeric, 1) as avg_position
       FROM gsc_snapshots
-      WHERE snapshot_date >= CURRENT_DATE - INTERVAL '60 days'
-        AND snapshot_date < CURRENT_DATE - INTERVAL '30 days'
+      WHERE snapshot_date > (SELECT d FROM latest) - INTERVAL '60 days'
+        AND snapshot_date <= (SELECT d FROM latest) - INTERVAL '30 days'
       GROUP BY page_url
       ORDER BY total_impressions DESC
       LIMIT 15
@@ -432,6 +447,34 @@ async function initDB() {
       CREATE INDEX IF NOT EXISTS idx_gsc_query ON gsc_snapshots(query);
     `);
     console.log('✓ Database tables initialized');
+
+    // --- Migration: per-day GSC storage with upsert support ---
+    // Older versions of this app stored 90-day rollups stamped with the sync date
+    // (one snapshot_date per sync). The new sync writes one row per actual GSC date.
+    // Detect legacy shape (few distinct dates but many rows) and truncate once so
+    // the new model can populate cleanly. Then ensure the UNIQUE constraint exists.
+    const constraintCheck = await pool.query(`
+      SELECT 1 FROM pg_constraint WHERE conname = 'gsc_snapshots_page_query_date_key'
+    `);
+    if (constraintCheck.rows.length === 0) {
+      const shape = await pool.query(`
+        SELECT COUNT(*)::int AS rows, COUNT(DISTINCT snapshot_date)::int AS dates
+        FROM gsc_snapshots
+      `);
+      const { rows, dates } = shape.rows[0];
+      // Legacy rollup pattern: many rows concentrated into <=3 distinct dates.
+      // Anything matching this can't coexist with the new per-day model.
+      if (rows > 0 && dates > 0 && rows / dates > 500) {
+        console.log(`🧹 Detected legacy rollup data (${rows} rows / ${dates} dates). Truncating.`);
+        await pool.query('TRUNCATE gsc_snapshots RESTART IDENTITY');
+      }
+      await pool.query(`
+        ALTER TABLE gsc_snapshots
+        ADD CONSTRAINT gsc_snapshots_page_query_date_key
+        UNIQUE (page_url, query, snapshot_date)
+      `);
+      console.log('✓ Added UNIQUE (page_url, query, snapshot_date)');
+    }
   } catch (err) {
     console.error('Database init error:', err);
   }
@@ -444,6 +487,36 @@ initDB().then(() => {
     console.log(`✓ API available at http://localhost:${PORT}/api/`);
     console.log(`✓ Environment: ${process.env.NODE_ENV || 'development'}`);
   });
+
+  // Schedule daily GSC sync at 06:00 UTC. Each sync upserts the last 90 days,
+  // so daily runs naturally pick up GSC's revisions to recent days.
+  if (process.env.NODE_ENV === 'production') {
+    cron.schedule('0 6 * * *', async () => {
+      console.log('⏰ Scheduled GSC sync starting...');
+      try {
+        const count = await syncGSCData();
+        console.log(`✓ Scheduled sync done. Upserted ${count} rows.`);
+      } catch (err) {
+        console.error('❌ Scheduled sync failed:', err.message);
+      }
+    });
+    console.log('✓ Daily GSC sync scheduled (06:00 UTC)');
+
+    // Kick off an initial sync 30s after boot if the table is empty —
+    // makes a fresh deploy populate without waiting for cron or a manual trigger.
+    setTimeout(async () => {
+      try {
+        const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM gsc_snapshots');
+        if (rows[0].n === 0) {
+          console.log('📊 gsc_snapshots empty on boot — running initial sync');
+          const count = await syncGSCData();
+          console.log(`✓ Initial sync done. Upserted ${count} rows.`);
+        }
+      } catch (err) {
+        console.error('Initial sync check failed:', err.message);
+      }
+    }, 30_000);
+  }
 });
 
 module.exports = { app, pool };

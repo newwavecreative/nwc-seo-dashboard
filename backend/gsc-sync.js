@@ -93,8 +93,10 @@ async function syncGSCData() {
       requestBody: {
         startDate: startDate.toISOString().split('T')[0],
         endDate: endDate.toISOString().split('T')[0],
-        dimensions: ['page', 'query'],
-        rowLimit: 10000,
+        // 'date' dimension gives us per-day rows instead of a 90-day rollup,
+        // which is what makes time-windowed queries work correctly.
+        dimensions: ['date', 'page', 'query'],
+        rowLimit: 25000,
       },
     });
 
@@ -105,14 +107,16 @@ async function syncGSCData() {
 
     console.log(`📥 Received ${response.data.rows.length} rows from GSC`);
 
-    // Store data in database
-    const snapshotDate = new Date().toISOString().split('T')[0];
-    let insertedCount = 0;
-    let skippedCount = 0;
+    // Upsert each (date, page, query) row. GSC revises recent days, so we want
+    // re-syncs to overwrite rather than duplicate. Requires the UNIQUE constraint
+    // added by migrate-gsc-schema.js.
+    let upsertedCount = 0;
+    let errorCount = 0;
 
     for (const row of response.data.rows) {
-      const pageUrl = row.keys[0];
-      const query = row.keys[1];
+      const rowDate = row.keys[0]; // YYYY-MM-DD from GSC
+      const pageUrl = row.keys[1];
+      const query = row.keys[2];
       const impressions = row.impressions || 0;
       const clicks = row.clicks || 0;
       const ctr = row.ctr ? parseFloat((row.ctr * 100).toFixed(2)) : 0;
@@ -120,23 +124,24 @@ async function syncGSCData() {
 
       try {
         await pool.query(`
-          INSERT INTO gsc_snapshots 
-          (page_url, query, impressions, clicks, ctr, position, snapshot_date)
+          INSERT INTO gsc_snapshots
+            (page_url, query, impressions, clicks, ctr, position, snapshot_date)
           VALUES ($1, $2, $3, $4, $5, $6, $7)
-        `, [pageUrl, query, impressions, clicks, ctr, position, snapshotDate]);
-        insertedCount++;
+          ON CONFLICT (page_url, query, snapshot_date) DO UPDATE SET
+            impressions = EXCLUDED.impressions,
+            clicks = EXCLUDED.clicks,
+            ctr = EXCLUDED.ctr,
+            position = EXCLUDED.position
+        `, [pageUrl, query, impressions, clicks, ctr, position, rowDate]);
+        upsertedCount++;
       } catch (err) {
-        // Duplicate insert is fine, just skip
-        if (err.code === '23505') {
-          skippedCount++;
-        } else {
-          console.error('Insert error:', err.message);
-        }
+        errorCount++;
+        if (errorCount <= 5) console.error('Upsert error:', err.message);
       }
     }
 
-    console.log(`✓ GSC sync complete. Inserted ${insertedCount} records (${skippedCount} duplicates skipped)`);
-    return insertedCount;
+    console.log(`✓ GSC sync complete. Upserted ${upsertedCount} records (${errorCount} errors)`);
+    return upsertedCount;
   } catch (err) {
     console.error('❌ GSC sync error:', err.message);
     throw err;
